@@ -21,6 +21,8 @@ from bidi.algorithm import get_display
 from dotenv import load_dotenv
 from arabic_reshaper import reshape
 from functools import wraps
+from flask import Flask
+from threading import Thread
 
 # جلب التاريخ الحالي وتاريخ الغد تلقائياً وتنسيقهما
 today = dt_module.date.today()
@@ -77,9 +79,29 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     logging.critical("❌ لم يتم العثور على BOT_TOKEN في ملف .env!")
     raise ValueError("Missing BOT_TOKEN")
-
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "all_court_data.xlsx"
+# =====================================================================
+# --- خادم الويب المصغر (Flask) المتوافق مع شروط بيئة Render ---
+# =====================================================================
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive!"
+
+def run():
+    # Render تلقائياً تضع رقم المنفذ في المتغير PORT
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+# تشغيل السيرفر الوهمي في مسار جانبي حتى لا يعطل برنامجك الأساسي
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# استدعاء الدالة في بداية تشغيل الملف
+keep_alive()
 
 # =====================================================================
 # 🔐 نظام إدارة الصلاحيات المطور عبر التحقق من رقم الهاتف (Live Security Gate)
