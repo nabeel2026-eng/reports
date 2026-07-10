@@ -1,4 +1,4 @@
-python-telegram-bot
+pyTelegramBotAPI
 pandas
 openpyxl
 reportlab
