@@ -6,3 +6,4 @@ python-dateutil
 babel
 arabic-reshaper
 python-bidi
+hijri-converter
