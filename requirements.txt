@@ -1,6 +1,6 @@
-python-telegram-bot==20.3
-pandas==2.3.3
-openpyxl==3.1.2
-reportlab==4.0.2
-python-dateutil==2.8.2
-babel==2.12.1
+python-telegram-bot
+pandas
+openpyxl
+reportlab
+python-dateutil
+babel
