@@ -7,3 +7,4 @@ babel
 arabic-reshaper
 python-bidi
 hijri-converter
+python-dotenv
