@@ -4,3 +4,5 @@ openpyxl
 reportlab
 python-dateutil
 babel
+arabic-reshaper
+python-bidi
