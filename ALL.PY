@@ -650,7 +650,7 @@ def generate_report(chat_id):
                 else: raw_text = f"كشف بالتقرير القضائي: {report_title_text}"
 
                 date_line_text = Paragraph(ar(raw_text), style_line5)
-                judge_title_part = f" - فضيلة القاضي: {s.get('judge')}" if s.get('judge') != "all" else " (لكل القضاة)"
+                judge_title_part = f" القاضي: {s.get('judge')}" if s.get('judge') != "all" else " (لكل القضاة)"
                 text_table = Table([[Paragraph(f"{ar(p_type_str)}{ar(judge_title_part)} :<font color='#002060'><b>{ar('قسم')}</b></font>", style_title_main)]], colWidths=[450])
 
                 center_story_elements = [Spacer(1, 72), text_table, Spacer(1, 6), date_line_text]
@@ -1153,11 +1153,11 @@ def set_mode(call):
         kb.add(
             InlineKeyboardButton(f"📆 جلسات اليوم ({today_str})", callback_data=f"set_sessions_date:today:{today_str}"),
             InlineKeyboardButton(f"🌅 جلسات غداً ({tomorrow_str})", callback_data=f"set_sessions_date:tomorrow:{tomorrow_str}"),
-            InlineKeyboardButton("🔍 جلسات يوم معين", callback_data="set_sessions_date:single_day"),
-            InlineKeyboardButton("📊 تحديد فترة مححددة (نطاق زمني)", callback_data="set_sessions_date:custom_range"),
+            InlineKeyboardButton("🔍 جلسات يوم محدد", callback_data="set_sessions_date:single_day"),
+            InlineKeyboardButton("📊 تحديد فترة محددة (نطاق زمني)", callback_data="set_sessions_date:custom_range"),
             InlineKeyboardButton("🔙 العودة للرئيسية", callback_data="main_menu")
         )
-        bot.send_message(chat_id, "📅 **تحديد موعد جدولة رول الجلسات القادمة:**", reply_markup=kb)
+        bot.send_message(chat_id, "📅 **تحديد موعد قوائم الجلسات القادمة:**", reply_markup=kb)
     else:
         df = repo.get_sessions()
         if "نوعها" in df.columns:
@@ -1218,7 +1218,7 @@ def handle_core_type(call):
     judges.sort()
     s["judges"] = judges
     
-    guide_judges = "👨‍⚖️ **اختيار فضيلة رئيس الهيئة القضائية للمطابقة:**"
+    guide_judges = "👨‍⚖️ **اختيار اسمم القاضي للمطابقة:**"
     bot.send_message(chat_id, guide_judges, reply_markup=create_keyboard(judges, "core_judge", include_all=True, row_width=2))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("core_judge:"))
