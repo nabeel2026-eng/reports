@@ -79,6 +79,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     logging.critical("❌ لم يتم العثور على BOT_TOKEN في ملف .env!")
     raise ValueError("Missing BOT_TOKEN")
+
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "all_court_data.xlsx"
 # =====================================================================
@@ -545,9 +546,44 @@ def generate_report(chat_id):
         "excluded": "القضايا المستبعدة"
     }
     
+    # ---------- استبدال وتوسيع تسمية الملف لضم نطاق التاريخ واسم القاضي بصيغة عربية ----------
     report_title_text = mode_titles.get(mode, "تقرير قضائي")
-    filename = f"تقرير {report_title_text} - {type_label}.pdf"
-    filename = re.sub(r'[\\/*?:"<>|]', "", filename)
+    type_label = s.get("type", "الكل")
+    judge_label = s.get("judge", "الكل")
+
+    # بناء تسمية التاريخ المناسبة (تعامل مع single, range, all, والحالات الهجرية الديناميكية)
+    date_label = ""
+    try:
+        dt_type, sd, ed = parse_date_input(str(target_date))
+    except Exception:
+        dt_type, sd, ed = "invalid", None, None
+
+    if dt_type == "single" and sd is not None:
+        date_label = sd.strftime("%d/%m/%Y")
+    elif dt_type == "range" and sd is not None and ed is not None:
+        date_label = f"{sd.strftime('%d/%m/%Y')} - {ed.strftime('%d/%m/%Y')}"
+    elif isinstance(target_date, str) and ("hijri_prev_" in target_date or "hijri_curr_" in target_date):
+        h_info = s.get("dynamic_hijri", get_dynamic_hijri_months())
+        if "prev" in target_date:
+            date_label = f"{h_info['prev']['name']} ({h_info['prev']['start']} - {h_info['prev']['end']})"
+        else:
+            date_label = f"{h_info['current']['name']} ({h_info['current']['start']} - {h_info['current']['end']})"
+    elif str(target_date).lower() in ("all", "الكل"):
+        date_label = "شامل"
+    else:
+        date_label = str(target_date) if target_date else ""
+
+    # ترجمة الأرقام إلى العربية داخل التسمية
+    date_label_ar = to_arabic_number(date_label)
+
+    # دمج أجزاء الاسم: نوع التقرير، نوع القضايا، اسم القاضي، ونطاق التاريخ
+    judge_part = f" - {judge_label}" if judge_label and judge_label != "all" else ""
+    type_part = f" - {type_label}" if type_label else ""
+    date_part = f" - {date_label_ar}" if date_label_ar else ""
+
+    filename = f"تقرير {report_title_text}{type_part}{judge_part}{date_part}.pdf"
+    filename = re.sub(r'[\\/*?:"<>|]', "", filename).strip()
+# ----------------------------------------------------------------------------------------
     
     try:
         doc = SimpleDocTemplate(filename, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=10, bottomMargin=35)
@@ -659,108 +695,123 @@ def generate_report(chat_id):
             full_db = repo.get_sessions().copy()
             if full_db.empty: return bot.send_message(chat_id, "⚠️ الملف خالي من أي جلسات قادمة.")
             
+            # تحويل عمود الجلسة إلى تاريخ فقط للمقارنة والفرز
             full_db['temp_date_only'] = pd.to_datetime(full_db["الجلسة القادمة_parsed"], errors='coerce').dt.date
             raw_df = full_db.copy()
             
+            # تطبيق فلترة النطاق/اليوم
             date_type, start_dt, end_dt = parse_date_input(target_date)
-            if date_type == "single": raw_df = raw_df[raw_df["temp_date_only"] == start_dt.date()]
-            elif date_type == "range": raw_df = raw_df[(raw_df["temp_date_only"] >= start_dt.date()) & (raw_df["temp_date_only"] <= end_dt.date())]
+            if date_type == "single":
+                raw_df = raw_df[raw_df["temp_date_only"] == start_dt.date()]
+            elif date_type == "range":
+                raw_df = raw_df[(raw_df["temp_date_only"] >= start_dt.date()) & (raw_df["temp_date_only"] <= end_dt.date())]
             
+            # تطبيع أسماء الأنواع إن وجدت
             if "نوعها" in raw_df.columns:
                 raw_df["نوعها"] = raw_df["نوعها"].astype(str).str.strip().replace({"غير جسيمة": "غير جسيم", "غير جسيم": "غير جسيم"})
 
+            # تطبيق فلاتر القاضي والنوع إذا اختيرت
             if s.get("judge") != "all": raw_df = raw_df[raw_df["برئاسة القاضي"] == s.get("judge")]
             if s.get("type") != "all": raw_df = raw_df[raw_df["نوعها"] == s.get("type")]
             if raw_df.empty: return bot.send_message(chat_id, "⚠️ لم يتم العثور على أي جلسات مطابقة للنطاق المحدد.")
 
-            grouped = raw_df.groupby(["نوعها", "برئاسة القاضي"], sort=True)
+            # الآن نُرتّب حسب التاريخ ثم نقسم العرض يوم بيوم
+            raw_df = raw_df.sort_values(by=["temp_date_only", "نوعها", "برئاسة القاضي"])
+            unique_dates = sorted(raw_df['temp_date_only'].dropna().unique())
+
             valid_blocks = []
-            
             style_line3 = ParagraphStyle("l3", fontName=FONT_NAME_BOLD, fontSize=17, alignment=1, leading=22)
             style_line4 = ParagraphStyle("l4", fontName=FONT_NAME_BOLD, fontSize=15, alignment=1, leading=19)
             past_cell_style = ParagraphStyle("past_cell_st", fontName=FONT_NAME, fontSize=9, alignment=1, leading=12, spaceBefore=2, spaceAfter=2)
 
-            for (p_type, judge), group_df in grouped:
-                p_type_str = str(p_type)
-                judge_str = str(judge)
-                
-                first_date_raw = group_df["الجلسة القادمة_parsed"].iloc[0] if not group_df.empty else None
-                if first_date_raw and not pd.isna(first_date_raw):
-                    current_date_obj = first_date_raw.date()
-                    y, m, d = current_date_obj.year, current_date_obj.month, current_date_obj.day
-                    arabic_days = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
-                    day_name = arabic_days[current_date_obj.weekday()]
-                    months_ar = {1:"يناير", 2:"فبراير", 3:"مارس", 4:"أبريل", 5:"مايو", 6:"يونيو", 7:"يوليو", 8:"أغسطس", 9:"سبتمبر", 10:"أكتوبر", 11:"نوفمبر", 12:"ديسمبر"}
-                    month_name = months_ar.get(m, str(m))
-                    try:
-                        h = Gregorian(y, m, d).to_hijri()
-                        hijri_months_ar = {1: "محرم", 2: "صفر", 3: "ربيع الأول", 4: "ربيع الآخر", 5: "جمادى الأولى", 6: "جمادى الآخرة", 7: "رجب", 8: "شعبان", 9: "رمضان", 10: "شوال", 11: "ذو القعدة", 12: "ذو الحجة"}
-                        hijri_str = f"{to_arabic_number(h.day)}/{hijri_months_ar.get(h.month, '')}/{to_arabic_number(h.year)}هـ"
-                    except Exception: hijri_str = ""
-                    date_line_text = ar(f"يوم {day_name} {hijri_str} الموافق {to_arabic_number(d)} {month_name} {to_arabic_number(y)}م")
-                else:
-                    date_line_text = "قائمة الجلسات الفترية الحالية"
+            # نمر على كل يوم في النطاق ثم نجمع داخله حسب النوع والقاضي
+            for current_date in unique_dates:
+                date_df = raw_df[raw_df["temp_date_only"] == current_date]
+                if date_df.empty:
+                    continue
 
-                weeks_table_data = [[Paragraph(ar("عدد الجلسات"), center_style), Paragraph(ar("التاريخ"), center_style), Paragraph(ar("اليوم"), center_style)]]
-                if 'current_date_obj' in locals() and current_date_obj:
+                # إعداد سلاسل التاريخ لعنوان الصفحة لهذا اليوم
+                y, m, d = current_date.year, current_date.month, current_date.day
+                arabic_days = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+                day_name = arabic_days[current_date.weekday()] if hasattr(current_date, "weekday") else ""
+                months_ar = {1:"يناير", 2:"فبراير", 3:"مارس", 4:"أبريل", 5:"مايو", 6:"يونيو", 7:"يوليو", 8:"أغسطس", 9:"سبتمبر", 10:"أكتوبر", 11:"نوفمبر", 12:"ديسمبر"}
+                month_name = months_ar.get(m, str(m))
+                try:
+                    h = Gregorian(y, m, d).to_hijri()
+                    hijri_months_ar = {1: "محرم", 2: "صفر", 3: "ربيع الأول", 4: "ربيع الآخر", 5: "جمادى الأولى", 6: "جمادى الآخرة", 7: "رجب", 8: "شعبان", 9: "رمضان", 10: "شوال", 11: "ذو القعدة", 12: "ذو الحجة"}
+                    hijri_str = f"{to_arabic_number(h.day)}/{hijri_months_ar.get(h.month, '')}/{to_arabic_number(h.year)}هـ"
+                except Exception:
+                    hijri_str = ""
+                date_line_text = ar(f"يوم {day_name} {hijri_str} الموافق {to_arabic_number(d)} {month_name} {to_arabic_number(y)}م")
+
+                # داخل كل يوم نجمع حسب النوع والقاضي
+                grouped = date_df.groupby(["نوعها", "برئاسة القاضي"], sort=True)
+                for (p_type, judge), group_df in grouped:
+                    p_type_str = str(p_type)
+                    judge_str = str(judge)
+
+                    # إعداد رأس الجدول الخاص بهذا النوع للقاضي ليوم current_date
+                    weeks_table_data = [[Paragraph(ar("عدد الجلسات"), center_style), Paragraph(ar("التاريخ"), center_style), Paragraph(ar("اليوم"), center_style)]]
+                    # إحسب موجز الأسابيع بناءً على current_date
                     for w_idx in range(1, 6):
-                        next_w_date = current_date_obj + dt_module.timedelta(weeks=w_idx)
+                        next_w_date = current_date + dt_module.timedelta(weeks=w_idx)
                         future_count = len(full_db[(full_db["temp_date_only"] == next_w_date) & (full_db["برئاسة القاضي"] == str(judge).strip()) & (full_db["نوعها"] == str(p_type).strip())])
                         count_display = to_arabic_number(future_count) if future_count > 0 else ""
-                        weeks_table_data.append([Paragraph(f"<font color='red'><b>{count_display}</b></font>" if future_count > 0 else "", center_style), Paragraph(to_arabic_number(str(next_w_date)), center_style), Paragraph(ar(day_name if 'day_name' in locals() else ""), center_style)])
-                
-                weeks_small_table_container = Table([[Table(weeks_table_data, colWidths=[80, 100, 55], style=TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4F81BD")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#EAF2FB")), ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B2EBF2")), ("ALIGN", (0, 0), (-1, -1), "CENTER")]))]], colWidths=[235])
-                weeks_small_table_container.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 2.5, colors.HexColor("#002060")), ("PADDING", (0, 0), (-1, -1), 5)]))
+                        weeks_table_data.append([Paragraph(f"<font color='red'><b>{count_display}</b></font>" if future_count > 0 else "", center_style), Paragraph(to_arabic_number(str(next_w_date)), center_style), Paragraph(ar(day_name), center_style)])
 
-                center_elements = [Spacer(1, 70), Paragraph(f"{ar(judge_str)} <font color='blue'><b>{ar('القاضي:')}</b></font>", style_line3), Spacer(1, 4), Paragraph(f"{ar(p_type_str)} <font color='blue'><b>{ar('نوع القضايا:')}</b></font>", style_line4), Spacer(1, 4), Paragraph(date_line_text, style_line5)]
-                main_header_table = Table([[weeks_small_table_container, center_elements, Paragraph("", center_style)]], colWidths=[235, 350, 145])
+                    weeks_small_table_container = Table([[Table(weeks_table_data, colWidths=[80, 100, 55], style=TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4F81BD")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#EAF2FB")), ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B2EBF2")), ("ALIGN", (0, 0), (-1, -1), "CENTER")]))]], colWidths=[235])
+                    weeks_small_table_container.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 2.5, colors.HexColor("#002060")), ("PADDING", (0, 0), (-1, -1), 5)]))
 
-                decision_header_subtable = Table([
-                    [Paragraph(ar("قرار الجلسة"), header_cell_style), ""],
-                    [Paragraph(ar("الحالية"), header_cell_style), Paragraph(ar("الماضية"), header_cell_style)]
-                ], colWidths=[154, 76])
-                decision_header_subtable.setStyle(TableStyle([
-                    ("SPAN", (0, 0), (1, 0)), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#002060")), ("LINEBELOW", (0, 0), (1, 0), 0.5, colors.white),
-                    ("LINEBEFORE", (1, 1), (1, 1), 0.5, colors.white), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-                ]))
-
-                block = []
-                headers = ["الجلسة القادمة", decision_header_subtable, "المدعى عليه", "المدعي", "موضوع القضية", "نوع القضية", "رقم القضية", "م"]
-                table_data = [[main_header_table, "", "", "", "", "", "", ""], [h if isinstance(h, Table) else Paragraph(ar(h), header_cell_style) for h in headers]]
-                
-                for i, (_, row) in enumerate(group_df.iterrows(), 1):
-                    decision_cell_subtable = Table([
-                        [Paragraph("", past_cell_style), Paragraph(ar(row["قرار الجلسة"]), past_cell_style)]
+                    center_elements = [Spacer(1, 70), Paragraph(f"{ar(judge_str)} <font color='blue'><b>{ar('القاضي:')}</b></font>", style_line3), Spacer(1, 4), Paragraph(f"{ar(p_type_str)} <font color='blue'><b>{ar('نوع القضايا:')}</b></font>", style_line4), Spacer(1, 4), Paragraph(date_line_text, style_line5)]
+                    main_header_table = Table([[weeks_small_table_container, center_elements, Paragraph("", center_style)]], colWidths=[235, 350, 145])
+                   
+                    decision_header_subtable = Table([
+                        [Paragraph(ar("قرار الجلسة"), header_cell_style), ""],
+                        [Paragraph(ar("الحالية"), header_cell_style), Paragraph(ar("الماضية"), header_cell_style)]
                     ], colWidths=[154, 76])
-                    decision_cell_subtable.setStyle(TableStyle([
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.black),
-                        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                    decision_header_subtable.setStyle(TableStyle([
+                        ("SPAN", (0, 0), (1, 0)), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#002060")), ("LINEBELOW", (0, 0), (1, 0), 0.5, colors.white),
+                        ("LINEBEFORE", (1, 1), (1, 1), 0.5, colors.white), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                     ]))
 
-                    table_data.append([
-                        Paragraph("", center_style), decision_cell_subtable, Paragraph(ar(row["المدعى عليه"]), right_style), 
-                        Paragraph(ar(row["المدعي"]), right_style), Paragraph(ar(row["موضوعها"]), center_style), 
-                        Paragraph(ar(row["نوعها"]), center_style), Paragraph(ar(clean_case_no(row["رقم القضية"])), center_style), 
-                        Paragraph(to_arabic_number(i), center_style)
-                    ])
-                
-                t = Table(table_data, colWidths=[80, 230, 115, 115, 100, 55, 65, 25], style=TableStyle([
-                    ("SPAN", (0, 0), (-1, 0)), ("GRID", (0, 1), (-1, -1), 0.5, colors.black), 
-                    ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#002060")), ("LINEBELOW", (0, 1), (-1, 1), 2.2, colors.HexColor("#001030")),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 1), (-1, 1), 0), ("BOTTOMPADDING", (0, 1), (-1, 1), 0),
-                    ("TOPPADDING", (0, 2), (-1, -1), 3), ("BOTTOMPADDING", (0, 2), (-1, -1), 3),
-                ]), repeatRows=2)
-                
-                t.setStyle(TableStyle([("POSTSCRIPT", (0, 1), (-1, -1), draw_rounded_table_background)]))
-                block.append(t)
-                valid_blocks.append(block)
+                    # بناء جدول القضايا لليوم/النوع/القاضي الحالي
+                    block = []
+                    headers = ["الجلسة القادمة", decision_header_subtable, "المدعى عليه", "المدعي", "موضوع القضية", "نوع القضية", "رقم القضية", "م"]
+                    table_data = [[main_header_table, "", "", "", "", "", "", ""], [h if isinstance(h, Table) else Paragraph(ar(h), header_cell_style) for h in headers]]
 
+                    for i, (_, row) in enumerate(group_df.iterrows(), 1):
+                        decision_cell_subtable = Table([
+                            [Paragraph("", past_cell_style), Paragraph(ar(row["قرار الجلسة"]), past_cell_style)]
+                        ], colWidths=[154, 76])
+                        decision_cell_subtable.setStyle(TableStyle([
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.black),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                        ]))
+
+                        table_data.append([
+                            Paragraph("", center_style), decision_cell_subtable, Paragraph(ar(row["المدعى عليه"]), right_style),
+                            Paragraph(ar(row["المدعي"]), right_style), Paragraph(ar(row["موضوعها"]), center_style),
+                            Paragraph(ar(row["نوعها"]), center_style), Paragraph(ar(clean_case_no(row["رقم القضية"])), center_style),
+                            Paragraph(to_arabic_number(i), center_style)
+                        ])
+
+                    t = Table(table_data, colWidths=[80, 230, 115, 115, 100, 55, 65, 25], style=TableStyle([
+                        ("SPAN", (0, 0), (-1, 0)), ("GRID", (0, 1), (-1, -1), 0.5, colors.black),
+                        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#002060")), ("LINEBELOW", (0, 1), (-1, 1), 2.2, colors.HexColor("#001030")),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 1), (-1, 1), 0), ("BOTTOMPADDING", (0, 1), (-1, 1), 0),
+                        ("TOPPADDING", (0, 2), (-1, -1), 3), ("BOTTOMPADDING", (0, 2), (-1, -1), 3),
+                    ]), repeatRows=2)
+
+                    t.setStyle(TableStyle([("POSTSCRIPT", (0, 1), (-1, -1), draw_rounded_table_background)]))
+                    block.append(t)
+                    valid_blocks.append(block)
+
+            # أضف الفواصل بين الكتل ثم ابنِ المستند (كالسابق)
             for idx, block in enumerate(valid_blocks):
                 if idx > 0: story.append(PageBreak())
                 story.extend(block)
-
         else:
             if mode == "active_view":
                 df_base = pd.concat([repo.get_sessions(), repo.get_pending()], ignore_index=True).drop_duplicates(subset=["رقم القضية"])
