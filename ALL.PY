@@ -1218,7 +1218,7 @@ def handle_core_type(call):
     judges.sort()
     s["judges"] = judges
     
-    guide_judges = "👨‍⚖️ **اختيار اسمم القاضي للمطابقة:**"
+    guide_judges = "👨‍⚖️ **اختيار اسم القاضي للمطابقة:**"
     bot.send_message(chat_id, guide_judges, reply_markup=create_keyboard(judges, "core_judge", include_all=True, row_width=2))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("core_judge:"))
