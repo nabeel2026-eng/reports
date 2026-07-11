@@ -24,7 +24,7 @@ from functools import wraps
 from flask import Flask
 from threading import Thread
 
-# جلب التاريخ الحالي وتاريخ الغد تلقائياً وتنسيقهما
+# جلب التاريخ الحالي وتاريخ الغد تلقائياً وتنسيقهما (ملاحظة: سيتم استخدام نسخ ديناميكية عند بناء اللوحات)
 today = dt_module.date.today()
 tomorrow = today + dt_module.timedelta(days=1)
 
@@ -529,6 +529,33 @@ def create_keyboard(items, prefix, include_all=True, row_width=2):
 def clean_case_no(case):
     if pd.isna(case): return ""
     return str(case).replace(".0", "").strip()
+
+# --- حساب التاريخ الحالي وفق منطقة زمنية قابلة للتعديل (لتحديث "اليوم/غدًا" عند كل طلب) ---
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    _HAS_ZONEINFO = True
+except Exception:
+    ZoneInfo = None
+    _HAS_ZONEINFO = False
+
+def _get_now(tz_name="Asia/Aden"):
+    """
+    إرجاع التوقيت الحالي مع دعم zoneinfo إن وُجد، وإلا fallback إلى UTC+3.
+    غيّر tz_name إذا أردت منطقة زمنية أخرى.
+    """
+    try:
+        if _HAS_ZONEINFO and tz_name:
+            return dt_module.datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        pass
+    # fallback: افترض UTC ثم أضف 3 ساعات (مثال لليمن UTC+3)
+    return dt_module.datetime.utcnow() + dt_module.timedelta(hours=3)
+
+def get_today_tomorrow_str(tz_name="Asia/Aden"):
+    now = _get_now(tz_name)
+    today_local = now.date()
+    tomorrow_local = today_local + dt_module.timedelta(days=1)
+    return today_local.strftime('%Y/%m/%d'), tomorrow_local.strftime('%Y/%m/%d')
 
 def generate_report(chat_id):
     s = user_session.get(chat_id)
@@ -1149,10 +1176,12 @@ def set_mode(call):
     s["mode"] = mode
     
     if mode == "sessions":
+        # استخدم حسابًا ديناميكيًا لليوم والغد (يتضمن دعم الـ timezone)
+        today_str_local, tomorrow_str_local = get_today_tomorrow_str("Asia/Aden")
         kb = InlineKeyboardMarkup(row_width=1)
         kb.add(
-            InlineKeyboardButton(f"📆 جلسات اليوم ({today_str})", callback_data=f"set_sessions_date:today:{today_str}"),
-            InlineKeyboardButton(f"🌅 جلسات غداً ({tomorrow_str})", callback_data=f"set_sessions_date:tomorrow:{tomorrow_str}"),
+            InlineKeyboardButton(f"📆 جلسات اليوم ({today_str_local})", callback_data=f"set_sessions_date:today:{today_str_local}"),
+            InlineKeyboardButton(f"🌅 جلسات غداً ({tomorrow_str_local})", callback_data=f"set_sessions_date:tomorrow:{tomorrow_str_local}"),
             InlineKeyboardButton("🔍 جلسات يوم محدد", callback_data="set_sessions_date:single_day"),
             InlineKeyboardButton("📊 تحديد فترة محددة (نطاق زمني)", callback_data="set_sessions_date:custom_range"),
             InlineKeyboardButton("🔙 العودة للرئيسية", callback_data="main_menu")
