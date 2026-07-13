@@ -466,9 +466,18 @@ class CourtRepository:
                 except Exception: continue
             return pd.to_datetime(val, errors='coerce')
 
-        df[parsed_name] = date_series_clean.apply(smart_date_convert).dt.normalize()
-        return df
+        df[parsed_name] = pd.to_datetime(date_series, errors='coerce', dayfirst=True, format="mixed").dt.normalize()
+        
+        if is_finished_sheet:
+            def reclassify_disputes(row):
+                case_type = str(row["نوعها"]).strip()
+                case_subject = str(row["موضوعها"]).strip()
+                if "مدني" in case_type or "جنائي" in case_type:
+                    if "استشكال" in case_subject or "منازعة" in case_subject: return "المنازعات"
+                return row["نوعها"]
+            df["نوعها"] = df.apply(reclassify_disputes, axis=1)
 
+        return df
     def reload_data(self):
         if not os.path.exists(self.filepath): return
         try:
