@@ -965,7 +965,7 @@ def generate_report(chat_id):
             doc.build(story, canvasmaker=make_canvas)
             if os.path.exists(filename):
                 with open(filename, "rb") as f: 
-                    bot.send_document(chat_id, f, caption="🎯 تم إنشاء وتحديث كشف الـ PDF بنجاح وفقاً لصلاحيات رقم الهاتف المدقق وجاهز للاستخدام.")
+                   bot.send_document(chat_id, f, caption=f"📊 **تم تجهيز تقريرك القضائي المعتمد بنجاح!**\n📄 اسم الملف: `{filename}`", parse_mode="Markdown")        
             time.sleep(1)
             try: os.remove(filename)
             except Exception: pass
